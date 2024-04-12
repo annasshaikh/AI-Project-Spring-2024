@@ -1,3 +1,4 @@
+import os
 from queue import Queue
 import random
 import numpy as np
@@ -6,9 +7,9 @@ from pygame.locals import *
 from scipy.ndimage import label
 import math
 import copy
-
+import neat
 lifespan = 100000
-
+gen = 0
 class MapGenerator:
     def __init__(self, width, height, initial_density=0.3, iterations=8):
         self.width = width
@@ -22,11 +23,11 @@ class MapGenerator:
         self.end = self.find_random_point()
         self.start = self.find_random_point()
         self.definePoints()
-        self.enemyList = self.spawn_enemies(2)
+        self.enemyList = self.spawn_enemies(1)
         #self.map_array = self.load_map_from_csv("MAP.csv")
         self.distance = self.bfs_with_distance(self.end)
         self.distanceFromStart = self.getdistance(self.start)
-        self.save_map_to_csv(self.map_array,"MAP.csv")
+        #self.save_map_to_csv(self.map_array,"MAP.csv")
     def save_map_to_csv(self,map_array, file_path):
         map = copy.deepcopy(map_array)
         for e in self.enemyList:
@@ -76,7 +77,7 @@ class MapGenerator:
         return enemylist
     
     def getdistance(self, start_position):
-        return self.distance[start_position[0], start_position[1]]
+        return self.distance[int(start_position[0])][int(start_position[1])]
 
     def definePoints(self):
         self.map_array[self.end[0], self.end[1]] = 3
@@ -165,32 +166,7 @@ def setMag(vector, mag):
 def addVector(vector1, vector2):
     return [vector1[0] + vector2[0], vector1[1] + vector2[1]]
 
-class DNA:
-    def __init__(self, genes=None):
-        if genes:
-            self.genes = genes
-        else:
-            self.genes = []
-            for i in range(lifespan):
-                self.genes.append(randomVector())
-
-    def crossOver(self, partner):
-        newGenes = [None] * lifespan
-        mid = random.randint(0, len(self.genes) - 1)
-        for i in range(lifespan):
-            if i <= mid:
-                newGenes[i] = self.genes[i]
-            else:
-                newGenes[i] = partner.genes[i]
-        return DNA(newGenes)
-
-    def mutate(self):
-        for i in range(len(self.genes)):
-            percentage = i/float(len(self.genes)) #Will Move from 0 to 1
-            if random.random() < 0.03 - (0.01 * percentage):
-                self.genes[i] = randomVector()
-
-class Population(object):
+class PopulationRender(object):
     """ Creates a array of Players and Performs Functions as a whole"""
     def __init__(self,map):
 
@@ -200,33 +176,23 @@ class Population(object):
         pygame.display.set_caption("Game")
         self.font = pygame.font.Font(None, 36)
         self.map = map
-        self.enemylist = map.enemyList
-        self.players = []
-# Array to store rocket objects
-        self.pop_max = 1  # Maximum Population size
 
-        self.mating_pool = [] # to store copies of rocket objects for selection
-
-        # Creates given amount of objects and stores it in an array
-        for _ in range(self.pop_max):
-            self.players.append(Player(self.enemylist,None,map))
-
-    def run(self):
-        """ Updates our Population object params and shows it on screen """
-        self.screen.fill((255, 255, 255))
-        for span in range(lifespan):
-            anyOneAlive = False
-            for i in range(self.pop_max):
-                if (self.players[i].alive):
-                    self.players[i].update()
-                    anyOneAlive = True
-            if (not anyOneAlive):
-                break
-            else:
-                self.render(self.screen)
-            ia = input()
+    # def run(self):
+    #     """ Updates our Population object params and shows it on screen """
+    #     self.screen.fill((255, 255, 255))
+    #     for span in range(lifespan):
+    #         anyOneAlive = False
+    #         for i in range(self.pop_max):
+    #             if (self.players[i].alive):
+    #                 self.players[i].update()
+    #                 anyOneAlive = True
+    #         if (not anyOneAlive):
+    #             break
+    #         else:
+    #             self.render(self.screen)
+    #         ia = input()
         
-    def render(self, screen):
+    def render(self,players):
         """ Render the full map and red dots for each player's position """
         # Render the map
         # Determine the range of map coordinates to display on the screen
@@ -239,71 +205,19 @@ class Population(object):
         for y in range(min_row, max_row):
             for x in range(min_col, max_col):
                 if self.map.map_array[y, x] == 1:
-                    pygame.draw.rect(screen, (0, 0, 0), (x * 10, y * 10, 10, 10))
+                    pygame.draw.rect(self.screen, (255, 255, 255), (x * 10, y * 10, 10, 10))
                 elif self.map.map_array[y, x] == 3:
-                    pygame.draw.circle(screen, (255, 225, 0), (x * 10 + 5, y * 10 + 5), 5)
+                    pygame.draw.circle(self.screen, (255, 225, 0), (x * 10 + 5, y * 10 + 5), 5)
         
-         # Render red dots for each player's position
-        for player in self.players:
+            # Render red dots for each player's position
+        for player in players:
             if player.alive:
                 pygame.draw.circle(self.screen, (255, 0, 0), ((player.pos[1]- min_col) * 10 + 5, (player.pos[0]- min_row) * 10 + 5), 5)
                 for enemy in player.enemylist:
                     pygame.draw.circle(self.screen, (255, 0, 225), ((enemy.position[1]- min_col) * 10 + 5, (enemy.position[0]- min_row) * 10 + 5), 5)
                 
         pygame.display.flip()
-        self.clock.tick(30)
-
-       
-
-    def evaluate(self):
-        """ Evaluates our Population based on some fitness value and creates a mating pool based on them """
-        max_fitness = 0
-        second_max_fitness = 0
-        max_player = None
-        second_max_player = None
-        sum_fitness = 0
-
-        for i in range(self.pop_max):
-            self.players[i].calcFitness()
-            if self.players[i].fitness > max_fitness:
-                second_max_fitness = max_fitness
-                second_max_player = max_player
-                max_fitness = self.players[i].fitness
-                max_player = self.players[i]
-            elif self.players[i].fitness > second_max_fitness:
-                second_max_fitness = self.players[i].fitness
-                second_max_player = self.players[i]
-            sum_fitness += self.players[i].fitness
-
-        print("Average Fitness: ", sum_fitness / max_fitness)
-
-        for i in range(self.pop_max):
-            self.players[i].fitness /= max_fitness
-
-        self.mating_pool = []
-
-        for i in range(self.pop_max):
-            n = math.floor(self.players[i].fitness * 100)
-            for _ in range(n):
-                self.mating_pool.append(self.players[i])
-        print("Mating Pool: ", len(self.mating_pool))
-
-        
-        return max_player, second_max_player
-
-    def natural_selection(self,max_player, second_max_player):
-        """ Selects two fit members of Population and performs crossover and mutation on them, 
-            then makes the new population based on the new created member """
-        new_players = []
-        new_players.append(max_player)
-        new_players.append(second_max_player)
-        for _ in range(len(self.players) - 2):
-            parentA = np.random.choice(self.mating_pool).dna
-            parentB = np.random.choice(self.mating_pool).dna
-            childDNA = parentA.crossOver(parentB)
-            childDNA.mutate()
-            new_players.append(Player(self.enemylist,childDNA,self.map))
-        self.players = new_players
+        self.clock.tick(30)       
 
 class Enemy:
     def __init__(self, map_array, player_position,enemyPosition=None):
@@ -330,8 +244,10 @@ class Enemy:
         dx = self.player_position[1] - self.position[1]
         dy = self.player_position[0] - self.position[0]
         distance = max(abs(dx), abs(dy))
+        angle = math.atan2(dy, dx)  # Calculate the angle to the player
+        
         if distance == 0:
-            return True
+            return [True, distance, angle]  # Return distance, angle, and line of sight result
 
         dx /= distance
         dy /= distance
@@ -340,12 +256,11 @@ class Enemy:
             x = int(self.position[1] + dx * i)
             y = int(self.position[0] + dy * i)
             if x < 0 or y < 0 or x >= self.map_array.shape[1] or y >= self.map_array.shape[0] or self.map_array[y, x] == 1:
-                return False
-        return True
+                return [False, distance, angle]  # Return distance, angle, and line of sight result
+        return [True, distance, angle]  # Return distance, angle, and line of sight result
 
     def move_towards_player(self):
-        print("moving")
-        if not self.is_line_of_sight_clear():
+        if not self.is_line_of_sight_clear()[0]:
             return
         dx = self.player_position[1] - self.position[1]
         dy = self.player_position[0] - self.position[0]
@@ -373,104 +288,203 @@ class Enemy:
         dy = self.player_position[0] - self.position[0]
         distance = math.sqrt(dx ** 2 + dy ** 2)
         return distance < 2
+
 class Player:
-    def __init__(self, enemylist,dna=None, map=None):
-        if dna:
-            self.dna = dna
-        else: 
-            self.dna = DNA()
+    def __init__(self, enemylist, map=None):
         self.map = map
         self.pos = map.start
-        self.genes = self.dna.genes
+        self.velocity = [0.5, 0.5]  # Initial velocity
+        self.enemylist = copy.deepcopy(enemylist)
         self.alive = True
         self.crashed = False
         self.completed = False
         self.killed = False
         self.count = 0
         self.fitness = 0
-        self.enemylist = copy.deepcopy(enemylist)
+        self.sensor_angles = [0, math.pi/4, math.pi/2, 3*math.pi/4, math.pi, -3*math.pi/4, -math.pi/2, -math.pi/4]
+        self.sensor_distances = [0] * len(self.sensor_angles)
+    def getInputs(self):
+        inputs = [] + self.sensor_distances
+        for enemy in self.enemylist:
+            sight_data = enemy.is_line_of_sight_clear()
+            if sight_data[0]:
+                inputs = inputs + sight_data[1] + sight_data[2]
+            else:
+                inputs = inputs + [-1] + [-1]
+        return inputs
+    def update_sensor_distances(self):
+        for i, angle in enumerate(self.sensor_angles):
+            dx = math.cos(angle)
+            dy = math.sin(angle)
+            x = self.pos[0]
+            y = self.pos[1]
+            distance = 0
+            while True:
+                x += dx
+                y += dy
+                if x < 0 or y < 0 or x >= self.map.map_array.shape[1] or y >= self.map.map_array.shape[0] or self.map.map_array[int(y), int(x)] == 1:
+                    break
+                distance += 1
+            self.sensor_distances[i] = distance
+    def isOnWall(self, point):
+        return self.map.map_array[int(point[0]), int(point[1])] == 1
 
-    def isOnWall(self,point):
-        return self.map.map_array[point[0], point[1]] == 1
+    def isCompleted(self, point):
+        return self.map.map_array[int(point[0]), int(point[1])] == 3
 
-    def isCompleted(self,point):
-        return self.map.map_array[point[0], point[1]] == 3
     def isTouching(self):
         for enemy in self.enemylist:
-            if (enemy.isTouching()):
+            if enemy.isTouching():
                 return True
         return False
+
     def CountInSight(self):
         count = 0
         for enemy in self.enemylist:
-            if (enemy.is_line_of_sight_clear()):
+            if enemy.is_line_of_sight_clear()[0]:
                 count += 1
         return count
+
     def UpdateBots(self):
         for enemy in self.enemylist:
             enemy.updatePlayerPosition(self.pos)
-    def update(self):
-        NewPos = addVector(self.pos,self.genes[self.count])
-        if (self.isOnWall(NewPos)):
+
+    def steerLeft(self):
+        # Similar to Java implementation, rotate the velocity vector to the left
+        angle_change = 0.08
+        current_angle = math.atan2(self.velocity[1], self.velocity[0])
+        new_angle = current_angle + angle_change
+        self.velocity = [math.cos(new_angle), math.sin(new_angle)]
+
+    def steerRight(self):
+        # Similar to Java implementation, rotate the velocity vector to the right
+        angle_change = 0.08
+        current_angle = math.atan2(self.velocity[1], self.velocity[0])
+        new_angle = current_angle - angle_change
+        self.velocity = [math.cos(new_angle), math.sin(new_angle)]
+
+    def update(self,action):
+        f = 0.1
+        if (action == -1):
+            self.steerLeft()
+        elif (action == 1):
+            self.steerRight()
+
+        new_pos = [self.pos[0] + self.velocity[0], self.pos[1] + self.velocity[1]]
+        if self.map.getdistance(new_pos) < self.map.getdistance(self.pos):
+            f += 0.3
+        if self.isOnWall(new_pos):
             self.crashed = True
             self.alive = False
-        if self.isCompleted(NewPos):
+            f -= 1
+        elif self.isCompleted(new_pos):
             self.completed = True
             self.alive = False
-        if self.isTouching():
+            f += 5
+        elif self.isTouching():
             print("Killed By Enemy")
             self.killed = True
             self.alive = False
-        if self.alive:
-            self.pos = NewPos
+            f -= 5
+        else:
+            self.pos = new_pos
             self.UpdateBots()
             self.count += 1
-
-
+            self.update_sensor_distances()
+        return f
+    def isAlive(self):
+        return self.alive
     def render(self, screen):
         if not self.completed:
-            pygame.draw.circle(screen, (255, 0, 0), (self.pos[1], self.pos[0]), 1)  # Draw a red dot at player position
+            pygame.draw.circle(screen, (255, 0, 0), (int(self.pos[1]), int(self.pos[0])), 1)  # Draw a red dot at player position
         else:
-            pygame.draw.circle(screen, (255, 255, 0), (self.pos[1], self.pos[0]), 1)  # Draw a yellow dot at player position
+            pygame.draw.circle(screen, (255, 255, 0), (int(self.pos[1]), int(self.pos[0])), 1)  # Draw a yellow dot at player position
 
-    def calcFitness(self):
-        fitness = self.map.distanceFromStart - self.map.getdistance(self.pos)
-        if self.completed:
-            fitness *= 10
-        if self.crashed:
-            fitness /= 10
-        if self.killed:
-            fitness /= 15
-        following = self.CountInSight()
-        if following == 0 or self.killed:    
-            self.fitness = fitness 
-        else:
-            self.fitness = fitness / (following * 5)
-
-    def crossover(self, ParentB):
-        NewDNA = self.dna.crossOver(ParentB)
-        return Player(NewDNA, self.map)
-
-    def mutation(self):
-        self.dna.mutate()
-
-def main():
-   
-    map_generator = MapGenerator(50, 50)
-    population = Population(map_generator)
+    # def calcFitness(self):
+    #     fitness = self.map.distanceFromStart - self.map.getdistance(self.pos)
+    #     if self.completed:
+    #         fitness *= 10
+    #     if self.crashed:
+    #         fitness /= 10
+    #     if self.killed:
+    #         fitness /= 15
+    #     following = self.CountInSight()
+    #     if following == 0 or self.killed:    
+    #         self.fitness = fitness 
+    #     else:
+    #         self.fitness = fitness / (following * 5)
+map_generator = MapGenerator(50, 50)
+def eval_genomes(genomes, config):
+    global gen
+    gen += 1
+    enemylist = map_generator.enemyList
+    players = []
+    nets = []
+    ge = []
+    population = PopulationRender(map_generator)
+    for genome_id, genome in genomes:
+        genome.fitness = 0  # start with fitness level of 0
+        net = neat.nn.FeedForwardNetwork.create(genome, config)
+        nets.append(net)
+        players.append(Player(enemylist,map_generator))
+        ge.append(genome)
 
     running = True
-    while running:
+    while running and len(players) > 0:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-        print("Runing")
-
-        population.run()
-        a,b = population.evaluate()
-        population.natural_selection(a,b)
+        i = 0
+        for p in players:
+            i = players.index(p)
+            output = nets[i].activate(players[i].getInputs())
+            a = 0
+            if (output[0] < 0.5):
+                a = 0
+            elif (output[1] < 0.5):
+                a = -1
+            else:
+                a = 1
+            f = players[i].update(a)
+            ge[i].fitness += f
+            if (not players[i].isAlive()):
+                ge.pop(i)
+                players.pop(i)
+                nets.pop(i)
+            print("Population Len: ", len(players))
+            population.render(players)
 
     pygame.quit()
 
-if __name__ == "__main__":
-    main()
+def run(config_file):
+    """
+    runs the NEAT algorithm to train a neural network to play flappy bird.
+    :param config_file: location of config file
+    :return: None
+    """
+    config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                         neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                         config_file)
+
+    # Create the population, which is the top-level object for a NEAT run.
+    p = neat.Population(config)
+
+    # Add a stdout reporter to show progress in the terminal.
+    p.add_reporter(neat.StdOutReporter(True))
+    stats = neat.StatisticsReporter()
+    p.add_reporter(stats)
+    #p.add_reporter(neat.Checkpointer(5))
+    
+
+    # Run for up to 50 generations.
+    winner = p.run(eval_genomes, 50)
+
+    # show final stats
+    print('\nBest genome:\n{!s}'.format(winner))
+if __name__ == '__main__':
+    # Determine path to configuration file. This path manipulation is
+    # here so that the script will run successfully regardless of the
+    # current working directory.
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, 'config-feedforward.txt')
+    run(config_path)
