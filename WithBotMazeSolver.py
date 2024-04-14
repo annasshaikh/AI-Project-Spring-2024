@@ -1,4 +1,5 @@
 import os
+import pickle
 from queue import Queue
 import random
 import numpy as np
@@ -8,7 +9,6 @@ from scipy.ndimage import label
 import math
 import copy
 import neat
-lifespan = 100000
 gen = 0
 class MapGenerator:
     def __init__(self, width, height, initial_density=0.3, iterations=8):
@@ -23,7 +23,7 @@ class MapGenerator:
         self.end = self.find_random_point()
         self.start = self.find_random_point()
         self.definePoints()
-        self.enemyList = self.spawn_enemies(1)
+        self.enemyList = self.spawn_enemies(0)
         #self.map_array = self.load_map_from_csv("MAP.csv")
         self.distance = self.bfs_with_distance(self.end)
         self.distanceFromStart = self.getdistance(self.start)
@@ -303,17 +303,42 @@ class Player:
         self.fitness = 0
         self.sensor_angles = [0, math.pi/4, math.pi/2, 3*math.pi/4, math.pi, -3*math.pi/4, -math.pi/2, -math.pi/4]
         self.sensor_distances = [0] * len(self.sensor_angles)
+        self.sensor_gdistances = [0] * len(self.sensor_angles)
     def getInputs(self):
-        inputs = [] + self.sensor_distances
-        for enemy in self.enemylist:
-            sight_data = enemy.is_line_of_sight_clear()
-            if sight_data[0]:
-                inputs = inputs + sight_data[1] + sight_data[2]
-            else:
-                inputs = inputs + [-1] + [-1]
+        inputs = [] + self.sensor_distances + self.sensor_gdistances
+        # for enemy in self.enemylist:
+        #     sight_data = enemy.is_line_of_sight_clear()
+        #     if sight_data[0]:
+        #         inputs = inputs + [sight_data[1],sight_data[2]]
+        #     else:
+        #         inputs = inputs + [-1] + [-1]
         return inputs
-    def update_sensor_distances(self):
+    def update_sensor_gdistance(self):
+        current_angle = math.atan2(self.velocity[1], self.velocity[0])
         for i, angle in enumerate(self.sensor_angles):
+            angle = angle + current_angle
+            dx = math.cos(angle)
+            dy = math.sin(angle)
+            x = self.pos[0]
+            y = self.pos[1]
+            self.sensor_gdistances[i] = 1
+            for c in range(10):
+                ox = int(x)
+                oy = int(y)
+                x += dx
+                y += dy
+                nx = int(x)
+                ny = int(y)
+                if x < 0 or y < 0 or x >= self.map.map_array.shape[1] or y >= self.map.map_array.shape[0] or self.map.map_array[int(y), int(x)] == 1:
+                    break
+                if (self.map.getdistance([ox,oy]) < self.map.getdistance([nx,ny])):
+                    self.sensor_gdistances[i] = 0
+                    break
+            
+    def update_sensor_distances(self):
+        current_angle = math.atan2(self.velocity[1], self.velocity[0])
+        for i, angle in enumerate(self.sensor_angles):
+            angle = angle + current_angle
             dx = math.cos(angle)
             dy = math.sin(angle)
             x = self.pos[0]
@@ -351,28 +376,32 @@ class Player:
 
     def steerLeft(self):
         # Similar to Java implementation, rotate the velocity vector to the left
-        angle_change = 0.08
+        angle_change = math.pi/8
         current_angle = math.atan2(self.velocity[1], self.velocity[0])
         new_angle = current_angle + angle_change
         self.velocity = [math.cos(new_angle), math.sin(new_angle)]
 
     def steerRight(self):
         # Similar to Java implementation, rotate the velocity vector to the right
-        angle_change = 0.08
+        angle_change = math.pi/8
         current_angle = math.atan2(self.velocity[1], self.velocity[0])
         new_angle = current_angle - angle_change
         self.velocity = [math.cos(new_angle), math.sin(new_angle)]
 
     def update(self,action):
-        f = 0.1
+        f = -0.01
+        if ((self.count + 1) % 10000 == 0):
+            self.alive = False
         if (action == -1):
             self.steerLeft()
         elif (action == 1):
             self.steerRight()
 
         new_pos = [self.pos[0] + self.velocity[0], self.pos[1] + self.velocity[1]]
-        if self.map.getdistance(new_pos) < self.map.getdistance(self.pos):
-            f += 0.3
+        if self.map.getdistance(new_pos) <= self.map.getdistance(self.pos):
+            f += 0.05
+        else:
+            f -= 0.05
         if self.isOnWall(new_pos):
             self.crashed = True
             self.alive = False
@@ -391,6 +420,7 @@ class Player:
             self.UpdateBots()
             self.count += 1
             self.update_sensor_distances()
+            self.update_sensor_gdistance()
         return f
     def isAlive(self):
         return self.alive
@@ -413,10 +443,28 @@ class Player:
     #         self.fitness = fitness 
     #     else:
     #         self.fitness = fitness / (following * 5)
+
+def save_data(map_generator, genomes):
+    # Save map
+    with open('map_data.pkl', 'wb') as map_file:
+        pickle.dump(map_generator, map_file)
+
+    with open('genomes.pkl', 'wb') as genome_file:
+        pickle.dump(genomes, genome_file)
+
+def load_data():
+    # Load map
+    with open('map_data.pkl', 'rb') as map_file:
+        map_generator = pickle.load(map_file)
+
+    # Load genomes
+    with open('genomes.pkl', 'rb') as genome_file:
+        genomes = pickle.load(genome_file)
+
+    return [map_generator, genomes]
 map_generator = MapGenerator(50, 50)
 def eval_genomes(genomes, config):
     global gen
-    gen += 1
     enemylist = map_generator.enemyList
     players = []
     nets = []
@@ -438,25 +486,25 @@ def eval_genomes(genomes, config):
         for p in players:
             i = players.index(p)
             output = nets[i].activate(players[i].getInputs())
-            a = 0
-            if (output[0] < 0.5):
-                a = 0
-            elif (output[1] < 0.5):
-                a = -1
-            else:
-                a = 1
+            # Get the index of the maximum value
+            a = max(range(len(output)), key=lambda i: output[i])
             f = players[i].update(a)
             ge[i].fitness += f
             if (not players[i].isAlive()):
+                if (players[i].completed):
+                    # Save map and genomes when player is completed
+                    save_data(map_generator, genomes)
+                    print("Player Completed")
                 ge.pop(i)
                 players.pop(i)
                 nets.pop(i)
-            print("Population Len: ", len(players))
-            population.render(players)
-
+            if (gen % 50 == 0):
+                population.render(players)
+    
+    gen += 1
     pygame.quit()
 
-def run(config_file):
+def run(config_file, genomes=None):
     """
     runs the NEAT algorithm to train a neural network to play flappy bird.
     :param config_file: location of config file
@@ -467,7 +515,10 @@ def run(config_file):
                          config_file)
 
     # Create the population, which is the top-level object for a NEAT run.
-    p = neat.Population(config)
+    if genomes:
+        p = neat.Population(config,genomes)
+    else:
+        p = p = neat.Population(config)
 
     # Add a stdout reporter to show progress in the terminal.
     p.add_reporter(neat.StdOutReporter(True))
@@ -475,9 +526,8 @@ def run(config_file):
     p.add_reporter(stats)
     #p.add_reporter(neat.Checkpointer(5))
     
-
     # Run for up to 50 generations.
-    winner = p.run(eval_genomes, 50)
+    winner = p.run(eval_genomes, 500)
 
     # show final stats
     print('\nBest genome:\n{!s}'.format(winner))
